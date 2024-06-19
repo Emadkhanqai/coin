@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crypto Price Predictor</title>
+    <link
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin-top: 50px;
+      }
+      input,
+      button {
+        margin: 5px;
+      }
+      .spinner-border {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container text-center">
+      <h1 class="mt-5">Crypto Price Predictor</h1>
+      <div class="form-group mt-3">
+        <input
+          type="text"
+          class="form-control"
+          id="coin"
+          placeholder="Enter coin (e.g., bitcoin)"
+        />
+      </div>
+      <button class="btn btn-primary" onclick="predictMovement()">
+        Predict Next 15 Minutes
+      </button>
+      <div class="spinner-border text-primary mt-3" role="status" id="spinner">
+        <span class="sr-only">Loading...</span>
+      </div>
+      <p class="mt-3" id="result"></p>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+      async function fetchCoinData(coin) {
+        const response = await axios.get(
+          `https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=1`
+        );
+        return response.data.prices;
+      }
+      // Preprocess Data: Normalize prices for better model performance
+      // Preprocess Data: Normalize prices for better model performance
+      function preprocessData(prices) {
+        const inputs = [];
+        const outputs = [];
+        for (let i = 0; i < prices.length - 1; i++) {
+          inputs.push([i]);
+          outputs.push(prices[i][1]);
+        }
+        const {
+          normalizedData: normalizedOutputs,
+          min,
+          max,
+        } = normalizeData(outputs);
+        return { inputs, normalizedOutputs, min, max };
+      }
+
+      // Normalize Data
+      function normalizeData(data) {
+        const min = Math.min(...data);
+        const max = Math.max(...data);
+        const normalizedData = data.map((value) => (value - min) / (max - min));
+        return { normalizedData, min, max };
+      }
+
+      // Inverse Normalize Data
+      function inverseNormalizeData(value, min, max) {
+        return value * (max - min) + min;
+      }
+
+      // Train Model
+      async function trainModel(inputs, outputs) {
+        const model = tf.sequential();
+        model.add(
+          tf.layers.lstm({
+            units: 50,
+            returnSequences: false,
+            inputShape: [1, 1],
+          })
+        );
+        model.add(tf.layers.dense({ units: 1 }));
+        model.compile({ loss: "meanSquaredError", optimizer: "adam" });
+
+        const inputTensor = tf.tensor3d(
+          inputs.map((i) => [i]),
+          [inputs.length, 1, 1]
+        );
+        const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
+
+        await model.fit(inputTensor, outputTensor, {
+          epochs: 100,
+          callbacks: {
+            onEpochEnd: (epoch, logs) => {
+              console.log(`Epoch: ${epoch}, Loss: ${logs.loss}`);
+            },
+          },
+        });
+        return model;
+      }
+
+      // Predict Movement
+      async function predictMovement() {
+        const coin = document.getElementById("coin").value;
+        const spinner = document.getElementById("spinner");
+        const resultElement = document.getElementById("result");
+
+        spinner.style.display = "block";
+        resultElement.textContent = "";
+
+        try {
+          const prices = await fetchCoinData(coin);
+          const { inputs, normalizedOutputs, min, max } =
+            preprocessData(prices);
+
+          const model = await trainModel(inputs, normalizedOutputs);
+
+          const nextInput = [[inputs.length]];
+          const prediction = model.predict(tf.tensor3d([nextInput], [1, 1, 1]));
+          const normalizedPredictedPrice = (await prediction.data())[0];
+          const predictedPrice = inverseNormalizeData(
+            normalizedPredictedPrice,
+            min,
+            max
+          );
+
+          const currentPrice = prices[prices.length - 1][1];
+          const timestamp = new Date().toLocaleString();
+
+          resultElement.textContent = `Prediction as of ${timestamp}: The price is likely to go ${
+            predictedPrice > currentPrice ? "UP" : "DOWN"
+          }. Current Price: $${currentPrice.toFixed(
+            4
+          )}, Predicted Price: $${predictedPrice.toFixed(4)}`;
+        } catch (error) {
+          resultElement.textContent = `Error: ${error.message}`;
+        } finally {
+          spinner.style.display = "none";
+        }
+      }
+    </script>
+  </body>
+</html>
